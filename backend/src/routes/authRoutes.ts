@@ -15,6 +15,9 @@ const inMemoryUsers: any[] = [
   }
 ];
 
+// Helper to escape regex special characters
+const escapeRegex = (text: string) => text.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+
 // REGISTER
 router.post('/register', async (req: Request, res: Response) => {
   try {
@@ -27,7 +30,7 @@ router.post('/register', async (req: Request, res: Response) => {
     if (!password || password.length < 4) {
       return res.status(400).json({ message: 'Password must be at least 4 characters long.' });
     }
-    if (password !== confirmPassword) {
+    if (confirmPassword !== undefined && password !== confirmPassword) {
       return res.status(400).json({ message: 'Passwords do not match!' });
     }
 
@@ -37,9 +40,10 @@ router.post('/register', async (req: Request, res: Response) => {
 
     // Try MongoDB Atlas
     try {
-      const existingUser = await User.findOne({ username: { $regex: new RegExp(`^${cleanUsername}$`, 'i') } });
+      const safePattern = new RegExp(`^${escapeRegex(cleanUsername)}$`, 'i');
+      const existingUser = await User.findOne({ username: { $regex: safePattern } });
       if (existingUser) {
-        return res.status(400).json({ message: 'Username is already taken.' });
+        return res.status(400).json({ message: 'Username is already taken. Please choose another.' });
       }
 
       const newUser = await User.create({
@@ -54,11 +58,16 @@ router.post('/register', async (req: Request, res: Response) => {
         token,
         user: { username: newUser.username, avatarColor: newUser.avatarColor }
       });
-    } catch (dbErr) {
-      // Fallback in-memory
+    } catch (dbErr: any) {
+      // If duplicate key error from MongoDB
+      if (dbErr.code === 11000) {
+        return res.status(400).json({ message: 'Username is already taken. Please choose another.' });
+      }
+
+      // Fallback in-memory store if DB is unreachable
       const exists = inMemoryUsers.find(u => u.username.toLowerCase() === cleanUsername.toLowerCase());
       if (exists) {
-        return res.status(400).json({ message: 'Username is already taken.' });
+        return res.status(400).json({ message: 'Username is already taken. Please choose another.' });
       }
 
       const memUser = { username: cleanUsername, passwordHash, avatarColor };
@@ -88,7 +97,8 @@ router.post('/login', async (req: Request, res: Response) => {
 
     // Try MongoDB Atlas
     try {
-      const user = await User.findOne({ username: { $regex: new RegExp(`^${cleanUsername}$`, 'i') } });
+      const safePattern = new RegExp(`^${escapeRegex(cleanUsername)}$`, 'i');
+      const user = await User.findOne({ username: { $regex: safePattern } });
       if (!user) {
         return res.status(400).json({ message: 'User not found. Please register an account.' });
       }
